@@ -1,0 +1,328 @@
+{% load static %}
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AI Tutor — Chat LLM</title>
+  <link rel="stylesheet" href="{% static 'style.css' %}">
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="logo">📚</div>
+      <h1>Precettore - AI Prompt Tutor</h1>
+      <p class="subtitle">Impara a scrivere prompt efficaci per LLM attraverso la pratica guidata</p>
+      <div class="config-selector">
+        <label for="configuration-select">Stile di tutoraggio:</label>
+        <select id="configuration-select">
+          <option value="">Tutor Predefinito</option>
+          {% for config in configurations %}
+          <option value="{{ config.id }}" title="{{ config.description }}">{{ config.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </header>
+
+    <div class="instructions">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h3 style="margin:0">💡 Come funziona:</h3>
+        <button id="new-session-btn" class="new-session-btn" style="display:none">🔄 Nuova conversazione</button>
+      </div>
+      <ol>
+        <li><strong>Scrivi un prompt</strong> che vorresti ottimizzare per ChatGPT o altri LLM</li>
+        <li><strong>Il tutor analizzerà</strong> il tuo prompt e ti farà domande per capire le tue esigenze</li>
+        <li><strong>Insieme affinerete</strong> il prompt spiegando ogni miglioramento</li>
+        <li><strong>Riceverai un prompt ottimizzato</strong> pronto da usare, con spiegazioni didattiche</li>
+      </ol>
+      <p class="tip">💭 <em>Esempio di prompt da migliorare:</em> "Scrivi un articolo sulla tecnologia"</p>
+    </div>
+
+    <div id="session-indicator" class="session-indicator" style="display:none">
+      💬 <strong>Conversazione attiva</strong> - Il tutor ricorda i messaggi precedenti
+    </div>
+
+    <div id="agent-phase-indicator" class="agent-phase-indicator" style="display:none">
+      <span id="phase-icon">🔍</span>
+      <span id="phase-text">Fase: Analisi iniziale</span>
+      <div class="confidence-container">
+        <span class="confidence-label">Completezza:</span>
+        <div class="confidence-bar">
+          <div id="confidence-fill" class="confidence-fill" style="width:0%"></div>
+        </div>
+        <span id="confidence-percent" class="confidence-percent">0%</span>
+      </div>
+    </div>
+
+    <main id="chat" class="chat-container" style="display:none"></main>
+
+    <form id="form" class="input-form">
+      {% csrf_token %}
+      <textarea id="prompt" placeholder="Inserisci qui il prompt che vuoi ottimizzare..." rows="3"></textarea>
+      <button type="submit">🚀 Ottimizza questo prompt</button>
+    </form>
+  </div>
+
+  <script>
+    const form = document.getElementById('form');
+    const chat = document.getElementById('chat');
+    const promptEl = document.getElementById('prompt');
+    const configSelect = document.getElementById('configuration-select');
+    const newSessionBtn = document.getElementById('new-session-btn');
+    const sessionIndicator = document.getElementById('session-indicator');
+    const agentPhaseIndicator = document.getElementById('agent-phase-indicator');
+    const phaseIcon = document.getElementById('phase-icon');
+    const phaseText = document.getElementById('phase-text');
+    const confidenceFill = document.getElementById('confidence-fill');
+    const confidencePercent = document.getElementById('confidence-percent');
+
+    // Variabili per la gestione della sessione
+    let currentSessionId = null;
+
+    // Mappa delle fasi agente
+    const agentPhases = {
+      'analyze': { icon: '🔍', text: 'Analisi del prompt' },
+      'interview': { icon: '❓', text: 'Raccolta informazioni' },
+      'data_collection': { icon: '📋', text: 'Raccolta dati' },
+      'refine': { icon: '✨', text: 'Raffinamento prompt' },
+      'validate': { icon: '✅', text: 'Validazione finale' },
+      'complete': { icon: '🎉', text: 'Completato!' }
+    };
+
+    // Funzione per aggiornare l'indicatore di fase
+    function updatePhaseIndicator(phase) {
+      if (!phase || !agentPhases[phase]) return;
+
+      const phaseInfo = agentPhases[phase];
+      phaseIcon.textContent = phaseInfo.icon;
+      phaseText.textContent = 'Fase: ' + phaseInfo.text;
+      agentPhaseIndicator.style.display = 'flex';
+    }
+
+    // Funzione per aggiornare il confidence score
+    function updateConfidenceScore(score) {
+      if (score === undefined || score === null) return;
+
+      const roundedScore = Math.round(score);
+      confidenceFill.style.width = roundedScore + '%';
+      confidencePercent.textContent = roundedScore + '%';
+
+      // Cambia colore in base allo score
+      if (roundedScore >= 80) {
+        confidenceFill.style.background = 'linear-gradient(90deg, #10b981, #059669)'; // Verde
+      } else if (roundedScore >= 65) {
+        confidenceFill.style.background = 'linear-gradient(90deg, #3b82f6, #2563eb)'; // Blu
+      } else if (roundedScore >= 40) {
+        confidenceFill.style.background = 'linear-gradient(90deg, #f59e0b, #d97706)'; // Arancione
+      } else {
+        confidenceFill.style.background = 'linear-gradient(90deg, #6366f1, #4f46e5)'; // Indaco (inizio)
+      }
+    }
+
+    // Funzione per iniziare una nuova conversazione
+    function startNewSession() {
+      currentSessionId = null;
+      chat.innerHTML = '';
+      sessionIndicator.style.display = 'none';
+      newSessionBtn.style.display = 'none';
+      agentPhaseIndicator.style.display = 'none';
+      console.log('🔄 Nuova sessione avviata');
+    }
+
+    // Mostra indicatore di sessione attiva
+    function showSessionIndicator() {
+      sessionIndicator.style.display = 'block';
+      newSessionBtn.style.display = 'inline-block';
+    }
+
+    // Event listener per pulsante nuova sessione
+    newSessionBtn.addEventListener('click', startNewSession);
+
+    // Funzione per gestire lo streaming delle risposte
+    async function fetchStream(prompt, onToken) {
+      try {
+        console.log('Inizio richiesta LLM:', prompt);
+        console.log('Session ID corrente:', currentSessionId || 'Nessuna (verrà creata)');
+
+        // Ottieni il token CSRF
+        const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+
+        // Prepara i dati della richiesta
+        const requestData = {
+          prompt: prompt,
+          session_id: currentSessionId
+        };
+
+        // Aggiungi la configurazione selezionata
+        const selectedConfig = configSelect.value;
+        if (selectedConfig) {
+          requestData.configuration_id = selectedConfig;
+        }
+
+        const response = await fetch('/api/llm', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': csrfToken
+          },
+          body: JSON.stringify(requestData)
+        });
+
+        console.log('Risposta ricevuta:', response.status, response.statusText);
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('Errore risposta:', errorText);
+          throw new Error(`Errore ${response.status}: ${response.statusText} - ${errorText}`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+
+        while(true){
+          const { done, value } = await reader.read();
+          if(done) break;
+
+          const chunk = decoder.decode(value);
+          const lines = chunk.split('\n');
+
+          for(const line of lines){
+            if(line.startsWith('data: ')){
+              const data = line.slice(6).trim();
+              if(data === '[DONE]') return;
+
+              try{
+                const json = JSON.parse(data);
+
+                // Salva la session_id quando arriva dal backend
+                if(json.session_id && !currentSessionId) {
+                  currentSessionId = json.session_id;
+                  console.log('✅ Session ID salvata:', currentSessionId);
+                  showSessionIndicator();
+                }
+
+                // Aggiorna l'indicatore di fase
+                if(json.agent_phase) {
+                  console.log('📊 Fase agente aggiornata:', json.agent_phase);
+                  updatePhaseIndicator(json.agent_phase);
+                }
+
+                // Aggiorna il confidence score
+                if(json.confidence_score !== undefined) {
+                  console.log('📈 Confidence score:', json.confidence_score + '%');
+                  updateConfidenceScore(json.confidence_score);
+                }
+
+                if(json.content) {
+                  onToken(json.content);
+                }
+              }catch(e){
+                console.log('Errore parsing JSON:', e);
+              }
+            }
+          }
+        }
+      } catch(error) {
+        console.error('Errore fetch:', error);
+        onToken(`Errore: ${error.message}`);
+      }
+    }
+
+    function appendMsg(role, text){
+      // Mostra la chat quando c'è contenuto
+      if (chat.style.display === 'none') {
+        chat.style.display = 'flex';
+      }
+
+      const div = document.createElement('div');
+      div.className = `msg ${role}`;
+
+      // Processa il testo per trovare prompt finali e renderli copiabili
+      if (role === 'assistant' && text.includes('═══════════════════════════════════')) {
+        processPromptContainer(div, text);
+      } else {
+        div.textContent = text;
+      }
+
+      chat.appendChild(div);
+      chat.scrollTop = chat.scrollHeight;
+      return div;
+    }
+
+    function processPromptContainer(div, text) {
+      // Cerca prompt delimitati da ═══
+      const promptRegex = /═══════════════════════════════════\n([\s\S]*?)\n═══════════════════════════════════/;
+      const match = text.match(promptRegex);
+
+      if (match) {
+        const promptContent = match[1];
+        const beforePrompt = text.substring(0, match.index);
+        const afterPrompt = text.substring(match.index + match[0].length);
+
+        // Parte prima del prompt
+        if (beforePrompt) {
+          const beforeDiv = document.createElement('div');
+          beforeDiv.textContent = beforePrompt;
+          div.appendChild(beforeDiv);
+        }
+
+        // Container del prompt copiabile
+        const promptContainer = document.createElement('div');
+        promptContainer.className = 'copyable-prompt-container';
+
+        const promptBox = document.createElement('div');
+        promptBox.className = 'copyable-prompt';
+        promptBox.textContent = promptContent;
+
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'copy-btn';
+        copyBtn.innerHTML = '📋 Copia';
+        copyBtn.onclick = () => {
+          navigator.clipboard.writeText(promptContent).then(() => {
+            copyBtn.innerHTML = '✅ Copiato!';
+            setTimeout(() => {
+              copyBtn.innerHTML = '📋 Copia';
+            }, 2000);
+          });
+        };
+
+        promptContainer.appendChild(promptBox);
+        promptContainer.appendChild(copyBtn);
+        div.appendChild(promptContainer);
+
+        // Parte dopo il prompt
+        if (afterPrompt) {
+          const afterDiv = document.createElement('div');
+          afterDiv.textContent = afterPrompt;
+          div.appendChild(afterDiv);
+        }
+      } else {
+        // Nessun prompt trovato, rendering normale
+        div.textContent = text;
+      }
+    }
+
+    form.addEventListener('submit', async e=>{
+      e.preventDefault();
+      const prompt = promptEl.value.trim();
+      if(!prompt) return;
+
+      promptEl.value='';
+      const userDiv = appendMsg('user', prompt);
+      const respDiv = appendMsg('assistant', '');
+
+      await fetchStream(prompt, token=>{
+        respDiv.textContent += token;
+
+        // Riprocessa il messaggio se contiene delimitatori di prompt
+        if (respDiv.textContent.includes('═══════════════════════════════════')) {
+          respDiv.innerHTML = '';
+          processPromptContainer(respDiv, respDiv.textContent || token);
+        }
+
+        chat.scrollTop = chat.scrollHeight;
+      });
+    });
+  </script>
+</body>
+</html>
