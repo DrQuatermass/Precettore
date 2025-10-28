@@ -529,6 +529,12 @@ def llm_api(request):
                 params = configuration.get_api_parameters()
                 client_config = configuration.get_client_config()
 
+                # Ottieni i tools abilitati
+                tools = configuration.get_tools()
+                if tools:
+                    params['tools'] = tools
+                    logger.info(f"Tools abilitati per questa richiesta: {[t.get('type', t) for t in tools]}")
+
                 # Configura il client OpenAI (supporta anche API custom)
                 client = OpenAI(**client_config)
 

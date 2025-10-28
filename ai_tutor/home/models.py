@@ -3,6 +3,66 @@ from django.contrib.auth.models import User
 from django.core.validators import MinValueValidator, MaxValueValidator
 import json
 
+class Tool(models.Model):
+    """Tool disponibili per i modelli LLM (web search, code interpreter, file search, etc.)"""
+
+    # Informazioni base
+    name = models.CharField(
+        max_length=100,
+        unique=True,
+        help_text="Nome identificativo del tool (es: web_search, code_interpreter)"
+    )
+    display_name = models.CharField(
+        max_length=200,
+        help_text="Nome visualizzato nell'admin (es: Web Search, Code Interpreter)"
+    )
+    description = models.TextField(
+        help_text="Descrizione delle funzionalità del tool"
+    )
+
+    # Configurazione tecnica
+    provider = models.CharField(
+        max_length=100,
+        choices=[
+            ('openai', 'OpenAI'),
+            ('anthropic', 'Anthropic'),
+            ('google', 'Google'),
+            ('universal', 'Universale'),
+        ],
+        default='universal',
+        help_text="Provider che supporta questo tool"
+    )
+
+    tool_type = models.CharField(
+        max_length=100,
+        help_text="Tipo di tool per l'API (es: 'web_search', 'code_interpreter', 'file_search')"
+    )
+
+    # Configurazione JSON per parametri specifici del tool
+    configuration = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Configurazione specifica del tool in formato JSON. Es: {'type': 'web_search'} per OpenAI"
+    )
+
+    # Stato
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Tool attivo e disponibile per l'uso"
+    )
+
+    # Metadati
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.display_name} ({self.provider})"
+
+    class Meta:
+        verbose_name = "Tool"
+        verbose_name_plural = "Tools"
+        ordering = ['provider', 'display_name']
+
 class LLMConfiguration(models.Model):
     """Configurazione unificata per LLM - include modello, API, contesto e parametri"""
 
@@ -103,6 +163,14 @@ class LLMConfiguration(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
 
+    # Tools abilitati per questa configurazione
+    tools = models.ManyToManyField(
+        Tool,
+        blank=True,
+        related_name='configurations',
+        help_text="Tool abilitati per questa configurazione (es: web search, code interpreter)"
+    )
+
     def __str__(self):
         return f"{self.name} ({self.provider}: {self.model_name})"
 
@@ -152,6 +220,42 @@ class LLMConfiguration(models.Model):
             config['base_url'] = self.base_url
 
         return config
+
+    def get_tools(self):
+        """Restituisce i tools attivi formattati per l'API del provider"""
+        active_tools = self.tools.filter(is_active=True)
+
+        if not active_tools.exists():
+            return []
+
+        tools_list = []
+        for tool in active_tools:
+            # Filtra solo i tool compatibili con il provider
+            if tool.provider not in [self.provider, 'universal']:
+                continue
+
+            # Formato specifico per provider
+            if self.provider == 'openai':
+                # OpenAI usa il formato: {"type": "web_search"} o {"type": "code_interpreter"}
+                tool_config = tool.configuration.copy() if tool.configuration else {}
+                if 'type' not in tool_config:
+                    tool_config['type'] = tool.tool_type
+                tools_list.append(tool_config)
+            elif self.provider == 'anthropic':
+                # Anthropic potrebbe avere formato diverso
+                tools_list.append({
+                    'name': tool.name,
+                    'type': tool.tool_type,
+                    **(tool.configuration or {})
+                })
+            else:
+                # Formato generico
+                tools_list.append({
+                    'type': tool.tool_type,
+                    **(tool.configuration or {})
+                })
+
+        return tools_list
 
     def save(self, *args, **kwargs):
         # Se questa è la configurazione predefinita, rimuovi il flag dalle altre

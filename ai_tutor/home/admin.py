@@ -2,7 +2,28 @@ from django.contrib import admin
 from django.utils.html import format_html
 from django.urls import reverse
 from django.utils.safestring import mark_safe
-from .models import LLMConfiguration, ChatSession, ChatMessage
+from .models import Tool, LLMConfiguration, ChatSession, ChatMessage
+
+@admin.register(Tool)
+class ToolAdmin(admin.ModelAdmin):
+    list_display = ['display_name', 'name', 'provider', 'tool_type', 'is_active', 'created_at']
+    list_filter = ['provider', 'is_active', 'created_at']
+    search_fields = ['name', 'display_name', 'description']
+    readonly_fields = ['created_at', 'updated_at']
+
+    fieldsets = (
+        ('Informazioni Base', {
+            'fields': ('name', 'display_name', 'description', 'is_active')
+        }),
+        ('Configurazione Tecnica', {
+            'fields': ('provider', 'tool_type', 'configuration'),
+            'description': 'Configurazione del tool per l\'API del provider'
+        }),
+        ('Metadati', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
 
 @admin.register(LLMConfiguration)
 class LLMConfigurationAdmin(admin.ModelAdmin):
@@ -21,6 +42,10 @@ class LLMConfigurationAdmin(admin.ModelAdmin):
         ('Configurazione LLM e API', {
             'fields': ('provider', 'model_name', 'api_key', 'base_url'),
             'description': 'Configurazione del provider e modello LLM'
+        }),
+        ('Tools Abilitati', {
+            'fields': ('tools',),
+            'description': 'Seleziona i tool da abilitare (es: web search, code interpreter). I tool devono essere compatibili con il provider selezionato.'
         }),
         ('Contesto e Prompt', {
             'fields': ('system_prompt', 'additional_context'),
@@ -43,6 +68,8 @@ class LLMConfigurationAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
     )
+
+    filter_horizontal = ['tools']  # Interfaccia migliore per ManyToMany
 
     def save_model(self, request, obj, form, change):
         if not change:  # Se è un nuovo oggetto
