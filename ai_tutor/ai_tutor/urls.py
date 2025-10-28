@@ -16,6 +16,8 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path
+from django.conf import settings
+from django.conf.urls.static import static
 from home import views
 
 urlpatterns = [
@@ -25,3 +27,7 @@ urlpatterns = [
     path('api/configurations', views.get_configurations, name='get_configurations'),
     path('api/session/<str:session_id>/history', views.get_session_history, name='get_session_history'),
 ]
+
+# Serve static files in development
+if settings.DEBUG:
+    urlpatterns += static(settings.STATIC_URL, document_root=settings.STATICFILES_DIRS[0])
